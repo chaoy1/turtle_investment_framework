@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+.venv/
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Agent runtime configuration
+# NOTE: .agents/ is tracked for Codex/GPT skills. .deepseek/ is retained as a
+# legacy compatibility layer; keep both committed.
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project runtime outputs
+output/*
+!output/.gitkeep
+scripts/output/
+notebooks/output/
+/tmp/
+
+# Sensitive
+.env
+*.token
+
+# PDF files (annual reports, too large for git)
+*.pdf
+
+# Video assets
+video/
+
+# Project
+progress.md
+CLAUDE.md
+feature_list.json
+
+# Test artifacts
+.pytest_cache/
+.pytest_tmp/
+.test-tmp/
+.firecrawl/
