@@ -253,6 +253,7 @@ def extract_all_pages(pdf_path: str, verbose: bool = False) -> List[Tuple[int, s
 
     pages_text: List[Tuple[int, str]] = []
     garbled_count = 0
+    image_only_pages = set()
 
     try:
         with pdfplumber.open(pdf_path) as pdf:
@@ -263,6 +264,8 @@ def extract_all_pages(pdf_path: str, verbose: bool = False) -> List[Tuple[int, s
             for i, page in enumerate(pdf.pages):
                 page_num = i + 1
                 text = page.extract_text() or ""
+                if not text.strip() and getattr(page, "images", []):
+                    image_only_pages.add(page_num)
 
                 # Feature #45: table-aware extraction
                 tables = page.extract_tables()
@@ -285,13 +288,45 @@ def extract_all_pages(pdf_path: str, verbose: bool = False) -> List[Tuple[int, s
             raise RuntimeError(f"PDF is encrypted: {pdf_path}") from e
         raise RuntimeError(f"Cannot open PDF: {pdf_path}: {e}") from e
 
-    # Feature #44: PyMuPDF fallback if >30% pages are garbled
+    # Feature #44: Replace individual empty/garbled pages from PyMuPDF.
+    # A few critical statement pages can be unreadable even when the rest of
+    # the report extracts cleanly, so a whole-document 30% threshold is not
+    # sufficient.
+    weak_pages = {
+        page_num for page_num, text in pages_text
+        if not text.strip() or (len(text) > 50 and is_garbled(text))
+    }
+    fallback = None
+    if weak_pages:
+        if verbose:
+            print(f"Weak text detected on {len(weak_pages)}/{total} pages, trying PyMuPDF...")
+        fallback = fallback_extract_pymupdf(pdf_path, verbose=verbose)
+        if fallback:
+            fallback_by_page = dict(fallback)
+            pages_text = [
+                (page_num, fallback_by_page.get(page_num, text) or text)
+                if page_num in weak_pages else (page_num, text)
+                for page_num, text in pages_text
+            ]
+
+    # Preserve the original whole-document fallback for broadly garbled PDFs.
     if total > 0 and garbled_count / total > 0.30:
         if verbose:
             print(f"Garbled text detected ({garbled_count}/{total} pages), trying PyMuPDF...")
-        fallback = fallback_extract_pymupdf(pdf_path, verbose=verbose)
+        fallback = fallback or fallback_extract_pymupdf(pdf_path, verbose=verbose)
         if fallback:
             return fallback
+
+    unresolved_image_pages = [
+        page_num for page_num, text in pages_text
+        if page_num in image_only_pages and not text.strip()
+    ]
+    if unresolved_image_pages:
+        joined = ", ".join(str(page_num) for page_num in unresolved_image_pages)
+        print(
+            f"[pdf_preprocessor] 警告：图像页仍无可提取文本: {joined}；需要 OCR 或人工核对。",
+            file=sys.stderr,
+        )
 
     return pages_text
 

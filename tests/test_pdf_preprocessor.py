@@ -188,6 +188,55 @@ class TestPyMuPDFFallback:
             result = fallback_extract_pymupdf("/dummy.pdf")
             assert result is None
 
+    @patch("scripts.pdf_preprocessor.fallback_extract_pymupdf")
+    @patch("scripts.pdf_preprocessor.pdfplumber")
+    def test_empty_page_is_replaced_by_page_level_fallback(self, mock_pdfplumber, mock_fallback):
+        """Restoring whole-document-only fallback must break this regression test."""
+        page1 = MagicMock()
+        page1.extract_text.return_value = "正常正文"
+        page1.extract_tables.return_value = []
+        page2 = MagicMock()
+        page2.extract_text.return_value = None
+        page2.extract_tables.return_value = []
+        mock_pdf = MagicMock()
+        mock_pdf.pages = [page1, page2]
+        mock_pdf.__enter__.return_value = mock_pdf
+        mock_pdf.__exit__.return_value = False
+        mock_pdfplumber.open.return_value = mock_pdf
+        mock_fallback.return_value = [(1, "PyMuPDF 正文"), (2, "财务报表文本")]
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf") as f:
+            f.write(b"dummy")
+            f.flush()
+            result = extract_all_pages(f.name)
+
+        assert result == [(1, "正常正文"), (2, "财务报表文本")]
+
+    @patch("scripts.pdf_preprocessor.fallback_extract_pymupdf")
+    @patch("scripts.pdf_preprocessor.pdfplumber")
+    def test_unresolved_image_only_page_emits_explicit_warning(
+        self, mock_pdfplumber, mock_fallback, capsys
+    ):
+        """An image-only page must never disappear from the audit trail silently."""
+        page = MagicMock()
+        page.extract_text.return_value = None
+        page.extract_tables.return_value = []
+        page.images = [{"name": "full-page-scan"}]
+        mock_pdf = MagicMock()
+        mock_pdf.pages = [page]
+        mock_pdf.__enter__.return_value = mock_pdf
+        mock_pdf.__exit__.return_value = False
+        mock_pdfplumber.open.return_value = mock_pdf
+        mock_fallback.return_value = [(1, "")]
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf") as f:
+            f.write(b"dummy")
+            f.flush()
+            result = extract_all_pages(f.name)
+
+        assert result == [(1, "")]
+        assert "图像页仍无可提取文本: 1" in capsys.readouterr().err
+
 
 # ============================================================
 # Feature #45: Table-aware extraction

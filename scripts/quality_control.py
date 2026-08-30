@@ -134,6 +134,23 @@ def parse_kv(block: str) -> Dict[str, str]:
     for r in _rows(block):
         if not _is_sep(r) and len(r) >= 2:
             kv[r[0]] = r[1]
+    for line in block.splitlines():
+        match = re.match(r"^\s*-\s*([^:：]+)\s*[:：]\s*(.+?)\s*$", line)
+        if match:
+            kv.setdefault(match.group(1).strip(), match.group(2).strip())
+    aliases = {
+        "ts_code": "股票代码",
+        "name": "公司名称",
+        "industry": "行业",
+        "close": "当前价格",
+    }
+    for source, target in aliases.items():
+        if source in kv and target not in kv:
+            kv[target] = kv[source]
+    if "market_cap_mm" in kv and "总市值 (万元)" not in kv:
+        value = _num(kv["market_cap_mm"])
+        if value is not None:
+            kv["总市值 (万元)"] = str(value * 100.0)
     return kv
 
 
@@ -282,6 +299,32 @@ def build_report(sections: Dict[str, str], pe_bands: List[float],
     return "\n".join(parts) + "\n"
 
 
+def validate_core_sections(sections: Dict[str, str]) -> List[str]:
+    """Validate the canonical item×period contract for core financial sections."""
+    requirements = {
+        "3": ("利润表", ("营业收入", "归母净利润")),
+        "4": ("资产负债表", ("总资产",)),
+        "5": ("现金流量表", ("经营活动现金流",)),
+    }
+    errors: List[str] = []
+    for token, (label, required_items) in requirements.items():
+        if token not in sections:
+            errors.append(f"缺少 §{token} {label}")
+            continue
+        cols, data = parse_matrix(sections[token])
+        period_cols = [
+            col for col in cols
+            if re.fullmatch(r"\d{4}(?:Q[1-4]|H[12])?", col)
+        ]
+        if not period_cols:
+            errors.append(f"§{token} {label}没有可识别的期间列（疑似日期×指标方向）")
+            continue
+        for item in required_items:
+            if find_item(data, item) is None:
+                errors.append(f"§{token} {label}缺少核心指标：{item}")
+    return errors
+
+
 def _dividends_by_year(block: str) -> Dict[str, float]:
     """§6 分红历史 → {年度: 总分红(百万元) 累加}."""
     if not block:
@@ -331,6 +374,13 @@ def main(argv=None) -> int:
     os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
     with open(args.output, "w", encoding="utf-8") as f:
         f.write(report)
+    validation_errors = validate_core_sections(sections)
+    if validation_errors:
+        sys.stderr.write("[quality_control] 数据结构校验失败：\n")
+        for error in validation_errors:
+            sys.stderr.write(f"  - {error}\n")
+        sys.stderr.write(f"[quality_control] 已写入降级诊断结果 {args.output}\n")
+        return 2
     sys.stderr.write(f"[quality_control] 已写入 {args.output}\n")
     return 0
 

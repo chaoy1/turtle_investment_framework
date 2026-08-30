@@ -89,6 +89,19 @@ class TestParser:
         assert kv["当前价格"] == "100.00"
         assert kv["股票代码"] == "TEST.SZ"
 
+    def test_parse_kv_accepts_legacy_colon_bullets(self):
+        """Dropping backward compatibility with existing real data packs must fail."""
+        block = """## 1. 基本信息
+
+- ts_code: 600887.SH
+- close: 10.5
+- market_cap_mm: 10000.0
+"""
+        kv = parse_kv(block)
+        assert kv["股票代码"] == "600887.SH"
+        assert kv["当前价格"] == "10.5"
+        assert kv["总市值 (万元)"] == "1000000.0"
+
     def test_find_item_prefix(self, sections):
         _, data = parse_matrix(sections["5"])
         assert find_item(data, "经营活动现金流", "OCF") is not None
@@ -157,3 +170,70 @@ class TestCLI:
         assert rc == 0
         # EPS 2.0 × 15 × 0.8 = 24.00
         assert "24.00" in out.read_text(encoding="utf-8")
+
+    def test_main_rejects_date_by_metric_core_tables_but_writes_diagnostics(self, tmp_path, capsys):
+        """Returning zero for a collector-shaped malformed core table must fail."""
+        bad = tmp_path / "bad.md"
+        bad.write_text("""# 数据包
+
+## 1. 基本信息
+
+- ts_code: TEST.SZ
+
+## 3. 合并利润表
+
+| end_date | revenue | n_income_attr_p | basic_eps |
+| --- | ---: | ---: | ---: |
+| 2025-12-31 | 1000 | 100 | 2.0 |
+
+## 4. 合并资产负债表
+
+| end_date | total_assets |
+| --- | ---: |
+| 2025-12-31 | 2000 |
+
+## 5. 现金流量表
+
+| end_date | n_cashflow_act | capex |
+| --- | ---: | ---: |
+| 2025-12-31 | 120 | 30 |
+""", encoding="utf-8")
+        out = tmp_path / "computed.md"
+
+        rc = main(["--input", str(bad), "--output", str(out)])
+
+        assert rc == 2
+        assert out.exists()
+        assert "数据结构校验失败" in capsys.readouterr().err
+
+    @pytest.mark.parametrize("period", ["2026H1", "2026Q3"])
+    def test_main_accepts_structurally_valid_interim_only_pack(self, tmp_path, period):
+        """Valid interim columns must not be rejected as malformed orientation."""
+        interim = tmp_path / "interim.md"
+        interim.write_text(f"""# 数据包
+
+## 3. 合并利润表
+
+| 项目 (百万元) | {period} |
+| --- | ---: |
+| 营业收入 | 1000 |
+| 归母净利润 | 100 |
+
+## 4. 合并资产负债表
+
+| 项目 (百万元) | {period} |
+| --- | ---: |
+| 总资产 | 2000 |
+
+## 5. 现金流量表
+
+| 项目 (百万元) | {period} |
+| --- | ---: |
+| 经营活动现金流 (OCF) | 120 |
+""", encoding="utf-8")
+        out = tmp_path / "computed.md"
+
+        rc = main(["--input", str(interim), "--output", str(out)])
+
+        assert rc == 0
+        assert "CM§1 跳过" in out.read_text(encoding="utf-8")
